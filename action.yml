@@ -41,9 +41,11 @@ runs:
         set -euo pipefail
         version="${INPUT_VERSION#v}"
         if [[ -z "$version" ]]; then
-          # The `latest` tag follows the newest release; its Cargo.toml names the version.
-          version=$(curl -fsSL --retry 3 https://github.com/metalbear-co/mirrord/raw/latest/Cargo.toml \
-            | grep -m 1 '^version' | cut -d'"' -f2)
+          # The `latest` tag follows the newest release; its Cargo.toml names the version. The file is
+          # read whole before grepping: a grep that stops early closes curl's pipe, and under pipefail
+          # curl's write error (exit 23) would fail the step.
+          manifest=$(curl -fsSL --retry 3 https://github.com/metalbear-co/mirrord/raw/latest/Cargo.toml)
+          version=$(printf '%s\n' "$manifest" | grep -m 1 '^version' | cut -d'"' -f2)
         fi
         if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
           echo "::error::Could not resolve a mirrord version from '${INPUT_VERSION:-latest}' (got '$version'); pass a release like 3.271.0"
@@ -65,7 +67,7 @@ runs:
 
     - name: Restore mirrord from cache
       id: cache
-      uses: actions/cache@v4
+      uses: actions/cache/restore@v4
       with:
         path: ${{ steps.resolve.outputs.install-dir }}
         key: ${{ steps.resolve.outputs.cache-key }}
@@ -78,6 +80,15 @@ runs:
         EXPECTED_CHECKSUM: ${{ steps.resolve.outputs.checksum }}
         INSTALL_DIR: ${{ steps.resolve.outputs.install-dir }}
       run: '"${{ github.action_path }}/scripts/install.sh"'
+
+    # Saved right after verification rather than by a post-job step, so the binary is cached even
+    # when a later step of the job fails, and a second use in the same job already hits it.
+    - name: Save mirrord to cache
+      if: steps.cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ steps.resolve.outputs.install-dir }}
+        key: ${{ steps.resolve.outputs.cache-key }}
 
     - name: Add mirrord to PATH
       shell: bash

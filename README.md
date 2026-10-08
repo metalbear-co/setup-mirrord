@@ -43,7 +43,7 @@ A workflow that runs on several runner types keeps one checksum per type, for ex
 
 ## Caching
 
-The binary is cached with [`actions/cache`](https://github.com/actions/cache) under a key made of the runner OS, architecture, version and pinned checksum. The first job on a runner downloads and verifies; later jobs restore the cached binary. Changing the pinned checksum changes the key, so an old binary is never reused for a new pin.
+The binary is cached with [`actions/cache`](https://github.com/actions/cache) under a key made of the runner OS, architecture, version and pinned checksum. The first job downloads and verifies, and saves the cache as soon as the binary passes verification; later jobs, and a second use within the same job, restore it. Changing the pinned checksum changes the key, so an old binary is never reused for a new pin.
 
 ## Latest release
 
