@@ -1,0 +1,89 @@
+name: 'Setup mirrord'
+description: 'Install a pinned mirrord CLI release, verified against its published checksum and cached per runner'
+branding:
+  icon: 'download'
+  color: 'purple'
+
+inputs:
+  version:
+    description: 'mirrord release to install, e.g. 3.271.0. Defaults to the latest release.'
+    required: false
+  checksum:
+    description: >-
+      Expected SHA-256 of the release asset for this runner (the mirrord_<os>_<arch>.zip on Linux and
+      macOS, mirrord.exe on Windows), as printed on the release page. Pins the binary itself, not only the
+      version: a mismatch fails the step. Without it the asset is still checked against the checksum file
+      published next to it.
+    required: false
+
+outputs:
+  version:
+    description: 'The mirrord version this action resolved and installed'
+    value: ${{ steps.resolve.outputs.version }}
+  path:
+    description: 'Directory the mirrord binary was installed into, already on PATH'
+    value: ${{ steps.resolve.outputs.install-dir }}
+  cache-hit:
+    description: 'Whether the binary came from the runner cache instead of a download'
+    value: ${{ steps.cache.outputs.cache-hit }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Resolve mirrord version
+      id: resolve
+      shell: bash
+      env:
+        INPUT_VERSION: ${{ inputs.version }}
+        INPUT_CHECKSUM: ${{ inputs.checksum }}
+        TOOL_CACHE: ${{ runner.tool_cache }}
+      run: |
+        set -euo pipefail
+        version="${INPUT_VERSION#v}"
+        if [[ -z "$version" ]]; then
+          # The `latest` tag follows the newest release; its Cargo.toml names the version.
+          version=$(curl -fsSL --retry 3 https://github.com/metalbear-co/mirrord/raw/latest/Cargo.toml \
+            | grep -m 1 '^version' | cut -d'"' -f2)
+        fi
+        if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          echo "::error::Could not resolve a mirrord version from '${INPUT_VERSION:-latest}' (got '$version'); pass a release like 3.271.0"
+          exit 1
+        fi
+        checksum=$(echo "$INPUT_CHECKSUM" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+        if [[ -n "$checksum" && ! "$checksum" =~ ^[0-9a-f]{64}$ ]]; then
+          echo "::error::'checksum' must be a 64-character hex SHA-256, got '$INPUT_CHECKSUM'"
+          exit 1
+        fi
+        install_dir="${TOOL_CACHE}/mirrord/${version}/${RUNNER_ARCH}"
+        {
+          echo "version=${version}"
+          echo "checksum=${checksum}"
+          echo "install-dir=${install_dir}"
+          # A pinned checksum is part of the cache identity, so changing it never reuses an old binary.
+          echo "cache-key=mirrord-${RUNNER_OS}-${RUNNER_ARCH}-${version}-${checksum:-published}"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Restore mirrord from cache
+      id: cache
+      uses: actions/cache@v4
+      with:
+        path: ${{ steps.resolve.outputs.install-dir }}
+        key: ${{ steps.resolve.outputs.cache-key }}
+
+    - name: Download and verify mirrord
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        MIRRORD_VERSION: ${{ steps.resolve.outputs.version }}
+        EXPECTED_CHECKSUM: ${{ steps.resolve.outputs.checksum }}
+        INSTALL_DIR: ${{ steps.resolve.outputs.install-dir }}
+      run: '"${{ github.action_path }}/scripts/install.sh"'
+
+    - name: Add mirrord to PATH
+      shell: bash
+      env:
+        INSTALL_DIR: ${{ steps.resolve.outputs.install-dir }}
+      run: |
+        set -euo pipefail
+        echo "$INSTALL_DIR" >> "$GITHUB_PATH"
+        "$INSTALL_DIR/mirrord" --version

@@ -1,0 +1,97 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # The pinned release and the checksums below belong together; bump them as one.
+  install:
+    name: ${{ matrix.os }} / ${{ matrix.case }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
+        case: [latest, pinned-version, pinned-checksum]
+        include:
+          - os: ubuntu-latest
+            checksum: 224f8d2e45189422a98f3a9b7d989dc3718e755f7c2e6153a9fb170b6279ef24
+          - os: ubuntu-24.04-arm
+            checksum: f7a112fcf39c87a6483c2d0a58899e84d9fc08d726198de9e3091df28af676e5
+          - os: macos-latest
+            checksum: 00b75199531d9507a4f55638c8924807ae273d1aba67360fd97904d751a1bb90
+          - os: windows-latest
+            checksum: 06190b9764ebf302facaef925bd247230aabb9383da3adab5f40d6864878ac71
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install (latest)
+        if: matrix.case == 'latest'
+        id: latest
+        uses: ./
+
+      - name: Install (pinned version)
+        if: matrix.case == 'pinned-version'
+        id: pinned
+        uses: ./
+        with:
+          version: 3.271.0
+
+      - name: Install (pinned version and checksum)
+        if: matrix.case == 'pinned-checksum'
+        uses: ./
+        with:
+          version: 3.271.0
+          checksum: ${{ matrix.checksum }}
+
+      - name: The binary runs and reports the resolved version
+        shell: bash
+        run: |
+          set -euo pipefail
+          mirrord --version
+          if [[ "${{ matrix.case }}" == "pinned-version" ]]; then
+            [[ "${{ steps.pinned.outputs.version }}" == "3.271.0" ]]
+            [[ "$(mirrord --version)" == "mirrord 3.271.0" ]]
+          fi
+
+  rejects-wrong-checksum:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install with a checksum that cannot match
+        id: install
+        continue-on-error: true
+        uses: ./
+        with:
+          version: 3.271.0
+          checksum: 0000000000000000000000000000000000000000000000000000000000000000
+      - name: The step failed and left no binary behind
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "${{ steps.install.outcome }}" == "failure" ]]
+          ! command -v mirrord
+
+  second-run-hits-cache:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./
+        with:
+          version: 3.271.0
+      - name: Same version again, from the cache
+        id: again
+        uses: ./
+        with:
+          version: 3.271.0
+      - shell: bash
+        run: |
+          set -euo pipefail
+          [[ "${{ steps.again.outputs.cache-hit }}" == "true" ]]
+          mirrord --version
